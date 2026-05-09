@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+
+# Node / Vite
+node_modules/
+dist/
+.vite/
+*.log
+npm-debug.log*
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Local data / build artifacts
+/static/
+/jobs/
+/tmp/
+
+# Auto-generated icons (regenerated from source.svg)
+# (kept in repo so README screenshots/icons render on github.com)

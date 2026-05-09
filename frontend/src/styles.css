@@ -1,0 +1,60 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root {
+  min-height: 100%;
+}
+
+body {
+  background: #0a0a0a;
+  font-family: "Inter", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  letter-spacing: -0.005em;
+  /* Use the dynamic viewport unit so iOS Safari address bar / PWA chrome
+     don't cause layout jumps. Falls back to 100vh on older browsers. */
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+/* Respect iOS safe areas (notch, Dynamic Island, home indicator) when the
+   site runs as a PWA — `env(safe-area-inset-*)` is 0 in regular browsers,
+   so these rules are inert outside standalone mode. */
+header {
+  padding-top: env(safe-area-inset-top);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+main {
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* Netflix-style scrolling row */
+.scroll-row {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scroll-row::-webkit-scrollbar { display: none; }
+
+/* Soft top fade */
+.fade-top {
+  -webkit-mask-image: linear-gradient(to bottom, black 70%, transparent 100%);
+          mask-image: linear-gradient(to bottom, black 70%, transparent 100%);
+}
+
+@keyframes shimmer {
+  0% { background-position: -800px 0; }
+  100% { background-position: 800px 0; }
+}
+.skeleton {
+  background: linear-gradient(90deg, #1a1a1a 0%, #262626 40%, #1a1a1a 80%);
+  background-size: 800px 100%;
+  animation: shimmer 1.4s infinite linear;
+}
+
+button:focus-visible, [role="button"]:focus-visible {
+  outline: 2px solid #e50914;
+  outline-offset: 2px;
+}

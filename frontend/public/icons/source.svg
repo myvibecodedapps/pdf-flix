@@ -1,0 +1,124 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <!-- Dark BG matching the app shell with a subtle red glow up top -->
+    <radialGradient id="bg" cx="50%" cy="22%" r="75%">
+      <stop offset="0%" stop-color="#2a1014"/>
+      <stop offset="35%" stop-color="#141414"/>
+      <stop offset="100%" stop-color="#050505"/>
+    </radialGradient>
+    <linearGradient id="paper" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#e9e6dc"/>
+    </linearGradient>
+    <linearGradient id="paperDark" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#dcd8c8"/>
+      <stop offset="100%" stop-color="#b9b5a4"/>
+    </linearGradient>
+    <radialGradient id="berry" cx="35%" cy="28%" r="85%">
+      <stop offset="0%" stop-color="#ff3a48"/>
+      <stop offset="55%" stop-color="#e50914"/>
+      <stop offset="100%" stop-color="#8a040c"/>
+    </radialGradient>
+    <radialGradient id="bump" cx="35%" cy="30%" r="65%">
+      <stop offset="0%" stop-color="#ff6877"/>
+      <stop offset="60%" stop-color="#e50914"/>
+      <stop offset="100%" stop-color="#a8050f"/>
+    </radialGradient>
+    <linearGradient id="leaf" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#7ed957"/>
+      <stop offset="100%" stop-color="#2e7d32"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="512" height="512" fill="url(#bg)"/>
+
+  <!-- PDF document, tilted slightly to feel dynamic -->
+  <g transform="translate(96 192) rotate(-6 168 168)">
+    <!-- soft drop shadow -->
+    <path d="M 14 30 L 14 358 Q 14 374 30 374 L 290 374 Q 306 374 306 358 L 306 96 L 224 14 L 30 14 Q 14 14 14 30 Z"
+          fill="#000" opacity="0.55"/>
+    <!-- page -->
+    <path d="M 0 18 Q 0 0 18 0 L 216 0 L 298 82 L 298 352 Q 298 370 280 370 L 18 370 Q 0 370 0 352 Z"
+          fill="url(#paper)"/>
+    <!-- folded corner (the inside of the fold) -->
+    <path d="M 216 0 L 298 82 L 230 82 Q 216 82 216 68 Z"
+          fill="url(#paperDark)"/>
+    <line x1="216" y1="0" x2="216" y2="70" stroke="#a09c8c" stroke-width="1.2"/>
+    <line x1="216" y1="70" x2="298" y2="82" stroke="#a09c8c" stroke-width="1.2"/>
+
+    <!-- "PDF" wordmark -->
+    <text x="148" y="232" text-anchor="middle"
+          font-family="Helvetica, Arial, sans-serif" font-weight="900"
+          font-size="76" fill="#e50914" letter-spacing="-2">PDF</text>
+
+    <!-- a few content lines beneath -->
+    <rect x="44" y="262" width="210" height="8"  rx="3" fill="#e50914" opacity="0.55"/>
+    <rect x="44" y="282" width="170" height="8"  rx="3" fill="#e50914" opacity="0.45"/>
+    <rect x="44" y="302" width="196" height="8"  rx="3" fill="#e50914" opacity="0.45"/>
+    <rect x="44" y="322" width="130" height="8"  rx="3" fill="#e50914" opacity="0.45"/>
+  </g>
+
+  <!-- Raspberry mascot — peeking out above the document like the "tool" handling it -->
+  <g transform="translate(284 138)">
+    <!-- Leaves: two curling leaves with a faint center stem -->
+    <g transform="translate(0 -48)">
+      <!-- left leaf -->
+      <path d="M -4 0
+               C -22 -8 -52 -14 -78 -50
+               C -64 -78 -34 -82 -14 -68
+               C -8 -56 -2 -28 -4 0 Z"
+            fill="url(#leaf)"/>
+      <path d="M -14 -68 C -28 -54 -48 -42 -78 -50"
+            stroke="#1f5d23" stroke-width="2.2" fill="none" opacity="0.55"/>
+      <!-- right leaf -->
+      <path d="M 4 0
+               C 22 -8 52 -14 78 -50
+               C 64 -78 34 -82 14 -68
+               C 8 -56 2 -28 4 0 Z"
+            fill="url(#leaf)"/>
+      <path d="M 14 -68 C 28 -54 48 -42 78 -50"
+            stroke="#1f5d23" stroke-width="2.2" fill="none" opacity="0.55"/>
+    </g>
+
+    <!-- Berry: cluster of bumps forming a heart-ish raspberry shape -->
+    <g>
+      <!-- back ring shadow for depth -->
+      <ellipse cx="0" cy="14" rx="86" ry="80" fill="#000" opacity="0.45"/>
+
+      <!-- bumps (drupelets), painted back-to-front -->
+      <circle cx="-46" cy="-20" r="30" fill="url(#bump)"/>
+      <circle cx="46"  cy="-20" r="30" fill="url(#bump)"/>
+      <circle cx="0"   cy="-34" r="32" fill="url(#bump)"/>
+      <circle cx="-66" cy="14"  r="30" fill="url(#bump)"/>
+      <circle cx="66"  cy="14"  r="30" fill="url(#bump)"/>
+      <circle cx="-30" cy="6"   r="30" fill="url(#bump)"/>
+      <circle cx="30"  cy="6"   r="30" fill="url(#bump)"/>
+      <circle cx="0"   cy="-2"  r="32" fill="url(#bump)"/>
+      <circle cx="-46" cy="40"  r="30" fill="url(#bump)"/>
+      <circle cx="46"  cy="40"  r="30" fill="url(#bump)"/>
+      <circle cx="0"   cy="38"  r="32" fill="url(#bump)"/>
+      <circle cx="-22" cy="68"  r="28" fill="url(#bump)"/>
+      <circle cx="22"  cy="68"  r="28" fill="url(#bump)"/>
+      <circle cx="0"   cy="86"  r="26" fill="url(#bump)"/>
+
+      <!-- glossy highlights on the upper-left of each bump -->
+      <g fill="#ffd6da" opacity="0.7">
+        <ellipse cx="-54" cy="-28" rx="6"  ry="4"  transform="rotate(-30 -54 -28)"/>
+        <ellipse cx="38"  cy="-28" rx="6"  ry="4"  transform="rotate(-30 38 -28)"/>
+        <ellipse cx="-8"  cy="-42" rx="6"  ry="4"  transform="rotate(-30 -8 -42)"/>
+        <ellipse cx="-74" cy="6"   rx="6"  ry="4"  transform="rotate(-30 -74 6)"/>
+        <ellipse cx="58"  cy="6"   rx="6"  ry="4"  transform="rotate(-30 58 6)"/>
+        <ellipse cx="-38" cy="-2"  rx="5"  ry="3"  transform="rotate(-30 -38 -2)"/>
+        <ellipse cx="22"  cy="-2"  rx="5"  ry="3"  transform="rotate(-30 22 -2)"/>
+        <ellipse cx="-8"  cy="-10" rx="6"  ry="4"  transform="rotate(-30 -8 -10)"/>
+        <ellipse cx="-54" cy="32"  rx="5"  ry="3"  transform="rotate(-30 -54 32)"/>
+        <ellipse cx="38"  cy="32"  rx="5"  ry="3"  transform="rotate(-30 38 32)"/>
+        <ellipse cx="-8"  cy="30"  rx="5"  ry="3"  transform="rotate(-30 -8 30)"/>
+        <ellipse cx="-30" cy="60"  rx="5"  ry="3"  transform="rotate(-30 -30 60)"/>
+        <ellipse cx="14"  cy="60"  rx="5"  ry="3"  transform="rotate(-30 14 60)"/>
+        <ellipse cx="-8"  cy="78"  rx="5"  ry="3"  transform="rotate(-30 -8 78)"/>
+      </g>
+    </g>
+  </g>
+</svg>
