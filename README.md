@@ -50,8 +50,8 @@ sudo apt install -y python3-venv python3-pip nodejs npm \
   librsvg2-bin
 
 # 2. Clone
-git clone git@github.com:myvibecodedapps/pdfflix.git
-cd pdfflix
+git clone git@github.com:myvibecodedapps/pdf-flix.git
+cd pdf-flix
 
 # 3. Backend deps
 python3 -m venv venv
