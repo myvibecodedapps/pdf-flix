@@ -58,6 +58,12 @@ def _new_job() -> tuple[str, Path]:
     return jid, p
 
 
+def _ts() -> str:
+    """Local-time stamp safe in filenames. Sorts lexicographically by time and
+    keeps repeated outputs of the same operation from colliding."""
+    return time.strftime("%Y%m%d-%H%M%S")
+
+
 async def _save_upload(file: UploadFile, dest: Path, max_mb: int = MAX_UPLOAD_MB) -> int:
     written = 0
     limit = max_mb * 1024 * 1024
@@ -208,10 +214,11 @@ async def split(job_id: str, ranges: str = Form(...), mode: str = Form("zip")):
     meta = json.loads((jdir / "meta.json").read_text())
     groups = _parse_ranges(ranges, meta["pages"])
     base = Path(meta["filename"]).stem
+    ts = _ts()
 
     if mode == "combined":
         # All selected pages, in input order, into a single PDF.
-        out = jdir / "split_combined.pdf"
+        out = jdir / f"pages-{ts}.pdf"
         with pikepdf.open(src) as pdf, pikepdf.new() as new_pdf:
             for pages in groups:
                 for p in pages:
@@ -219,14 +226,14 @@ async def split(job_id: str, ranges: str = Form(...), mode: str = Form("zip")):
             new_pdf.save(out)
         return {
             "download": f"/api/jobs/{job_id}/download/{out.name}",
-            "filename": f"{base}_pages.pdf",
+            "filename": f"{base}-pages-{ts}.pdf",
         }
 
     # zip mode
     out_files: list[Path] = []
     with pikepdf.open(src) as pdf:
         for idx, pages in enumerate(groups, 1):
-            out = jdir / f"split_{idx:03d}.pdf"
+            out = jdir / f"part-{ts}-{idx:03d}.pdf"
             with pikepdf.new() as new_pdf:
                 for p in pages:
                     new_pdf.pages.append(pdf.pages[p - 1])
@@ -236,16 +243,16 @@ async def split(job_id: str, ranges: str = Form(...), mode: str = Form("zip")):
     if len(out_files) == 1:
         return {
             "download": f"/api/jobs/{job_id}/download/{out_files[0].name}",
-            "filename": f"{base}_pages.pdf",
+            "filename": f"{base}-pages-{ts}.pdf",
         }
 
-    bundle = jdir / "split_bundle.zip"
+    bundle = jdir / f"split-{ts}.zip"
     with zipfile.ZipFile(bundle, "w", zipfile.ZIP_DEFLATED) as zf:
         for i, f in enumerate(out_files, 1):
-            zf.write(f, arcname=f"{base}_part_{i:03d}.pdf")
+            zf.write(f, arcname=f"{base}-part-{i:03d}.pdf")
     return {
         "download": f"/api/jobs/{job_id}/download/{bundle.name}",
-        "filename": f"{base}_split.zip",
+        "filename": f"{base}-split-{ts}.zip",
     }
 
 
@@ -262,7 +269,8 @@ async def merge(files: List[UploadFile] = File(...)):
         p = jdir / f"in_{i:03d}.pdf"
         await _save_upload(f, p)
         saved.append(p)
-    out = jdir / "merged.pdf"
+    ts = _ts()
+    out = jdir / f"merged-{ts}.pdf"
     with pikepdf.new() as new_pdf:
         for p in saved:
             with pikepdf.open(p) as src:
@@ -270,8 +278,8 @@ async def merge(files: List[UploadFile] = File(...)):
         new_pdf.save(out)
     return {
         "job_id": jid,
-        "download": f"/api/jobs/{jid}/download/merged.pdf",
-        "filename": "merged.pdf",
+        "download": f"/api/jobs/{jid}/download/{out.name}",
+        "filename": out.name,
     }
 
 
@@ -291,13 +299,17 @@ async def reorder(job_id: str, order: str = Form(...)):
     for x in seq:
         if x < 1 or x > meta["pages"]:
             raise HTTPException(400, f"page {x} out of range")
-    out = jdir / "reordered.pdf"
+    ts = _ts()
+    out = jdir / f"reordered-{ts}.pdf"
     with pikepdf.open(src) as pdf, pikepdf.new() as new_pdf:
         for x in seq:
             new_pdf.pages.append(pdf.pages[x - 1])
         new_pdf.save(out)
     base = Path(meta["filename"]).stem
-    return {"download": f"/api/jobs/{job_id}/download/reordered.pdf", "filename": f"{base}_reordered.pdf"}
+    return {
+        "download": f"/api/jobs/{job_id}/download/{out.name}",
+        "filename": f"{base}-reordered-{ts}.pdf",
+    }
 
 
 @app.post("/api/jobs/{job_id}/ocr")
@@ -314,9 +326,10 @@ async def ocr(
         raise HTTPException(404, "input missing")
     meta = json.loads((jdir / "meta.json").read_text())
     base = Path(meta["filename"]).stem
+    ts = _ts()
 
-    out_pdf = jdir / "ocr.pdf"
-    sidecar = jdir / "ocr.txt"
+    out_pdf = jdir / f"ocr-{ts}.pdf"
+    sidecar = jdir / f"ocr-{ts}.txt"
 
     cmd = [
         "ocrmypdf",
@@ -366,27 +379,27 @@ async def ocr(
 
     if output == "text":
         return {
-            "download": f"/api/jobs/{job_id}/download/ocr.txt",
-            "filename": f"{base}.txt",
+            "download": f"/api/jobs/{job_id}/download/{sidecar.name}",
+            "filename": f"{base}-ocr-{ts}.txt",
             "preview": preview,
             "notice": notice,
         }
     if output == "both":
-        bundle = jdir / "ocr_bundle.zip"
+        bundle = jdir / f"ocr-{ts}.zip"
         with zipfile.ZipFile(bundle, "w", zipfile.ZIP_DEFLATED) as zf:
-            zf.write(out_pdf, arcname=f"{base}.ocr.pdf")
+            zf.write(out_pdf, arcname=f"{base}-ocr.pdf")
             if sidecar.exists():
-                zf.write(sidecar, arcname=f"{base}.txt")
+                zf.write(sidecar, arcname=f"{base}-ocr.txt")
         return {
-            "download": f"/api/jobs/{job_id}/download/ocr_bundle.zip",
-            "filename": f"{base}_ocr.zip",
+            "download": f"/api/jobs/{job_id}/download/{bundle.name}",
+            "filename": f"{base}-ocr-{ts}.zip",
             "preview": preview,
             "notice": notice,
         }
     # default: pdf
     return {
-        "download": f"/api/jobs/{job_id}/download/ocr.pdf",
-        "filename": f"{base}.ocr.pdf",
+        "download": f"/api/jobs/{job_id}/download/{out_pdf.name}",
+        "filename": f"{base}-ocr-{ts}.pdf",
         "preview": preview,
         "notice": notice,
     }
@@ -474,10 +487,11 @@ def _augment_sidecar_with_extracted_text(pdf_path: Path, sidecar: Path) -> tuple
 @app.get("/api/jobs/{job_id}/text-preview")
 async def text_preview(job_id: str):
     jdir = _safe_job_dir(job_id)
-    sidecar = jdir / "ocr.txt"
-    if not sidecar.exists():
+    # Pick the most-recently-written ocr-<ts>.txt sidecar in this job.
+    candidates = sorted(jdir.glob("ocr-*.txt"))
+    if not candidates:
         raise HTTPException(404, "no OCR text yet")
-    return {"text": sidecar.read_text(errors="replace")}
+    return {"text": candidates[-1].read_text(errors="replace")}
 
 
 @app.get("/api/jobs/{job_id}/download/{name}")
