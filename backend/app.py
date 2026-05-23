@@ -678,30 +678,88 @@ async def ocr(
     out_pdf = jdir / f"ocr-{ts}.pdf"
     sidecar = jdir / f"ocr-{ts}.txt"
 
-    cmd = [
+    # 1) Pre-clean the input with pikepdf. A lot of "INVALID PDF" failures from
+    #    ocrmypdf trace back to a malformed source — re-saving through pikepdf
+    #    rewrites the xref and object streams, fixing most issues.
+    cleaned = jdir / f"cleaned-{ts}.pdf"
+    use_src = src
+    try:
+        with pikepdf.open(src) as p:
+            p.save(cleaned)
+        use_src = cleaned
+        log.info("ocr: pre-cleaned via pikepdf -> %s", cleaned.name)
+    except Exception as e:  # noqa: BLE001
+        log.warning("ocr: pikepdf pre-clean failed (%s), using original", e)
+
+    # 2) Two-stage retry. The default --optimize 1 produces smaller files but
+    #    its qpdf-based optimization step is the most common source of the
+    #    "Output file: The generated PDF is INVALID" verdict. On failure, retry
+    #    with --optimize 0 and --clean, which is a much more permissive path.
+    base_cmd = [
         "ocrmypdf",
         "-l", language,
         "--sidecar", str(sidecar),
         "--output-type", "pdf",
-        "--optimize", "1",
         "--jobs", str(max(1, os.cpu_count() or 2)),
     ]
-    if force:
-        cmd.append("--force-ocr")
-    else:
-        cmd.append("--skip-text")  # don't redo pages that already have text
-    cmd += [str(src), str(out_pdf)]
+    base_cmd.append("--force-ocr" if force else "--skip-text")
 
-    log.info("ocr cmd: %s", " ".join(cmd))
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout, stderr = await proc.communicate()
-    if proc.returncode != 0:
-        log.error("ocr failed: %s", stderr.decode("utf-8", "replace")[-2000:])
-        raise HTTPException(500, f"ocr failed: {stderr.decode('utf-8', 'replace')[-400:]}")
+    attempts: list[tuple[str, list[str]]] = [
+        ("default (--optimize 1)",         ["--optimize", "1"]),
+        ("safer (--optimize 0 --clean)",   ["--optimize", "0", "--clean"]),
+    ]
+
+    last_err = ""
+    ocr_succeeded = False
+    for label, extra in attempts:
+        cmd = base_cmd + extra + [str(use_src), str(out_pdf)]
+        log.info("ocr cmd [%s]: %s", label, " ".join(cmd))
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        _stdout, stderr = await proc.communicate()
+        last_err = stderr.decode("utf-8", "replace")
+        if proc.returncode == 0 and out_pdf.exists() and out_pdf.stat().st_size > 0:
+            ocr_succeeded = True
+            log.info("ocr: succeeded via %s", label)
+            break
+        log.warning("ocr attempt '%s' failed (rc=%s): %s", label, proc.returncode, last_err[-600:])
+        out_pdf.unlink(missing_ok=True)
+
+    ocr_fallback_notice: Optional[str] = None
+
+    if not ocr_succeeded:
+        # 3) Graceful degradation: extract whatever text the input already has
+        #    via PyMuPDF, write it as the sidecar, and (if user wanted a PDF)
+        #    serve the cleaned input as-is. The user at least gets the text.
+        log.warning("ocr: both attempts failed, falling back to text extraction")
+        text_parts: list[str] = []
+        try:
+            doc = fitz.open(use_src)
+            try:
+                for i in range(doc.page_count):
+                    text_parts.append(doc.load_page(i).get_text("text"))
+            finally:
+                doc.close()
+        except Exception as e:  # noqa: BLE001
+            log.error("ocr fallback text extraction failed: %s", e)
+            raise HTTPException(
+                500,
+                "OCR failed and the PDF couldn't be read for text extraction. "
+                "Try compressing the PDF first, or re-saving it from the source."
+            )
+        sidecar.write_text("\n".join(text_parts))
+        if output != "text":
+            # Copy cleaned input as the "ocr.pdf" so download links still work.
+            shutil.copyfile(use_src, out_pdf)
+        ocr_fallback_notice = (
+            "OCR couldn't produce a searchable PDF for this file (ocrmypdf "
+            "rejected its own output as INVALID even after a permissive retry). "
+            "PDFflix fell back to extracting any existing text layer with "
+            "PyMuPDF — you'll get whatever text was already in the PDF. "
+            "If the PDF is purely scanned images, try Compress first to "
+            "normalize it, then run OCR again."
+        )
 
     # If ocrmypdf skipped pages because they already have a text layer,
     # the sidecar is a placeholder like "[OCR skipped on page(s) 1-12]".
@@ -709,7 +767,9 @@ async def ocr(
     # so a .txt download is always actually useful.
     skipped_pages, sidecar_text = _augment_sidecar_with_extracted_text(out_pdf, sidecar)
     notice: Optional[str] = None
-    if skipped_pages:
+    if ocr_fallback_notice:
+        notice = ocr_fallback_notice
+    elif skipped_pages:
         if skipped_pages == "all":
             notice = (
                 "This PDF already has a searchable text layer on every page, so OCR "

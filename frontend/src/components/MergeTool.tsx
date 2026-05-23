@@ -114,6 +114,12 @@ export default function MergeTool() {
             </button>
             {/* Hidden file input controlled by the "Add more" button */}
             <input {...addMoreZone.getInputProps()} />
+
+            {result && (
+              <div className="mt-4">
+                <DownloadCard result={result} />
+              </div>
+            )}
           </div>
 
           <SidePanel error={error}>
@@ -122,7 +128,6 @@ export default function MergeTool() {
               {humanBytes(items.reduce((a, b) => a + b.file.size, 0))}
             </div>
             <RunButton onClick={run} busy={busy} icon={<Combine className="w-4 h-4" />} label="Merge" />
-            {result && <DownloadCard result={result} />}
           </SidePanel>
         </div>
       )}

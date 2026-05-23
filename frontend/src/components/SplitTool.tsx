@@ -193,6 +193,12 @@ export default function SplitTool() {
               </div>
             )}
 
+            {result && (
+              <div className="mt-4">
+                <DownloadCard result={result} />
+              </div>
+            )}
+
             {result?.chunks && result.chunks.length > 0 && (
               <div className="mt-4 bg-panel/60 border border-white/5 rounded-lg p-4 min-w-0">
                 <div className="text-xs uppercase tracking-wider text-muted mb-3">
@@ -218,7 +224,6 @@ export default function SplitTool() {
 
           <SidePanel error={error}>
             <RunButton onClick={run} busy={busy} icon={<Scissors className="w-4 h-4" />} label="Split" />
-            {result && <DownloadCard result={result} />}
           </SidePanel>
         </div>
       )}

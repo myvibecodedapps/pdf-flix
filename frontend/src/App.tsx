@@ -66,14 +66,23 @@ function Home({ onPick }: { onPick: (t: ToolId) => void }) {
         <h1 className="text-4xl sm:text-5xl font-bold tracking-tight">PDFflix</h1>
         <p className="text-muted mt-3">All local · No cloud · Full privacy</p>
       </div>
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 sm:gap-4">
+      {/* Flex-wrap (not grid) so an orphan tile in the last row centers itself
+          instead of stranding on the left. Tile widths use calc() so the
+          spacing matches what a grid with grid-cols-{2,3,5} would produce. */}
+      <div className="flex flex-wrap justify-center gap-3 sm:gap-4">
         {TOOLS.map((t) => {
           const Icon = t.icon;
           return (
             <button
               key={t.id}
               onClick={() => onPick(t.id)}
-              className="aspect-square flex flex-col items-center justify-center gap-3 bg-panel hover:bg-panel2 border border-white/5 hover:border-accent rounded-xl transition-colors group"
+              className="aspect-square
+                         w-[calc(50%-6px)]
+                         sm:w-[calc((100%-32px)/3)]
+                         md:w-[calc((100%-64px)/5)]
+                         flex flex-col items-center justify-center gap-3
+                         bg-panel hover:bg-panel2 border border-white/5
+                         hover:border-accent rounded-xl transition-colors group"
             >
               <Icon className="w-8 h-8 text-muted group-hover:text-accent transition-colors" />
               <span className="text-sm font-medium">{t.title}</span>

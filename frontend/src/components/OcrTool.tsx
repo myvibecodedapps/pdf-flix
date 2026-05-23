@@ -138,6 +138,8 @@ export default function OcrTool() {
               </div>
             )}
 
+            {result && <DownloadCard result={result} />}
+
             {result?.preview && (
               <div className="bg-panel/60 border border-white/5 rounded-lg p-4 min-w-0">
                 <div className="font-medium mb-2 flex items-center gap-2 text-sm">
@@ -155,7 +157,6 @@ export default function OcrTool() {
 
           <SidePanel error={error}>
             <RunButton onClick={run} busy={busy} icon={<ScanText className="w-4 h-4" />} label="Run OCR" />
-            {result && <DownloadCard result={result} />}
           </SidePanel>
         </div>
       )}

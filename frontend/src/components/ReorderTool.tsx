@@ -111,6 +111,12 @@ export default function ReorderTool() {
               </span>
             </div>
 
+            {result && (
+              <div className="mb-4">
+                <DownloadCard result={result} />
+              </div>
+            )}
+
             <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
               <SortableContext items={slots.map((s) => s.id)} strategy={rectSortingStrategy}>
                 <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-5 gap-2.5">
@@ -132,7 +138,6 @@ export default function ReorderTool() {
 
           <SidePanel error={error}>
             <RunButton onClick={run} busy={busy} icon={<ListOrdered className="w-4 h-4" />} label="Apply" />
-            {result && <DownloadCard result={result} />}
           </SidePanel>
         </div>
       )}
