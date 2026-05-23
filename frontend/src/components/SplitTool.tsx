@@ -1,11 +1,11 @@
 import { useState } from "react";
-import { Scissors, Download, X } from "lucide-react";
+import { Scissors, Download, X, Info } from "lucide-react";
 import FileDrop from "./FileDrop";
 import PageThumb from "./PageThumb";
 import PageViewer from "./PageViewer";
-import { humanBytes, splitJob, uploadPdf, type Job } from "../lib/api";
+import { humanBytes, splitJob, uploadPdf, type Job, type SplitResult } from "../lib/api";
 
-type Mode = "ranges" | "every" | "select";
+type Mode = "ranges" | "every" | "select" | "by-pages" | "by-size";
 
 export default function SplitTool() {
   const [job, setJob] = useState<Job | null>(null);
@@ -16,7 +16,9 @@ export default function SplitTool() {
   const [mode, setMode] = useState<Mode>("ranges");
   const [rangesText, setRangesText] = useState("");
   const [selected, setSelected] = useState<Set<number>>(new Set());
-  const [result, setResult] = useState<{ download: string; filename: string } | null>(null);
+  const [pagesPerChunk, setPagesPerChunk] = useState("10");
+  const [mbPerChunk, setMbPerChunk] = useState("5");
+  const [result, setResult] = useState<SplitResult | null>(null);
 
   const [viewing, setViewing] = useState<number | null>(null);
 
@@ -40,6 +42,7 @@ export default function SplitTool() {
     if (mode === "every") {
       return Array.from({ length: job.pages }, (_, i) => `${i + 1}`).join(",");
     }
+    // select
     const arr = Array.from(selected).sort((a, b) => a - b);
     if (!arr.length) return "";
     const out: string[] = [];
@@ -54,12 +57,25 @@ export default function SplitTool() {
 
   async function run() {
     if (!job) return;
-    const r = buildRanges();
-    if (!r) { setError("Pick at least one page or range."); return; }
-    setBusy(true); setError(null); setResult(null);
+    setError(null); setResult(null);
     try {
-      const splitMode = mode === "select" ? "combined" : "zip";
-      setResult(await splitJob(job.job_id, r, splitMode));
+      if (mode === "by-pages") {
+        const n = parseInt(pagesPerChunk, 10);
+        if (!n || n < 1) { setError("Pages per file must be at least 1."); return; }
+        setBusy(true);
+        setResult(await splitJob(job.job_id, { mode: "every-n", pages_per_chunk: n }));
+      } else if (mode === "by-size") {
+        const mb = parseFloat(mbPerChunk);
+        if (!mb || mb <= 0) { setError("Size per file must be > 0 MB."); return; }
+        setBusy(true);
+        setResult(await splitJob(job.job_id, { mode: "by-size", size_per_chunk_mb: mb }));
+      } else {
+        const r = buildRanges();
+        if (!r) { setError("Pick at least one page or range."); return; }
+        setBusy(true);
+        const splitMode = mode === "select" ? "combined" : "zip";
+        setResult(await splitJob(job.job_id, { mode: splitMode, ranges: r }));
+      }
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -75,6 +91,8 @@ export default function SplitTool() {
     });
   }
 
+  const autoMode = mode === "by-pages" || mode === "by-size";
+
   return (
     <div>
       <Header title="Split" />
@@ -86,10 +104,12 @@ export default function SplitTool() {
           <div className="min-w-0">
             <FileBadge job={job} onClear={() => { setJob(null); setSelected(new Set()); setResult(null); }} />
 
-            <Tabs value={mode} onChange={(v) => setMode(v as Mode)} options={[
-              { id: "ranges", label: "Ranges" },
-              { id: "every", label: "Every page" },
-              { id: "select", label: "Pick pages" },
+            <Tabs value={mode} onChange={(v) => { setMode(v as Mode); setResult(null); }} options={[
+              { id: "ranges",   label: "Ranges" },
+              { id: "every",    label: "Every page" },
+              { id: "select",   label: "Pick pages" },
+              { id: "by-pages", label: "By pages" },
+              { id: "by-size",  label: "By size" },
             ]} />
 
             {mode === "ranges" && (
@@ -109,13 +129,91 @@ export default function SplitTool() {
               </p>
             )}
 
-            <PageGrid
-              jobId={job.job_id}
-              total={job.pages}
-              selected={mode === "select" ? selected : null}
-              onToggle={mode === "select" ? togglePage : undefined}
-              onView={(p) => setViewing(p)}
-            />
+            {mode === "by-pages" && (
+              <div className="mt-4 max-w-sm">
+                <label className="text-sm text-muted">Pages per file</label>
+                <div className="flex items-center gap-2 mt-2">
+                  <input
+                    type="number" inputMode="numeric" min="1"
+                    value={pagesPerChunk}
+                    onChange={(e) => setPagesPerChunk(e.target.value)}
+                    className="flex-1 bg-panel border border-white/10 rounded-md px-4 py-2.5 font-mono focus:outline-none focus:border-accent"
+                  />
+                  <span className="text-sm text-muted">pages</span>
+                </div>
+                <p className="text-xs text-muted mt-2">
+                  A {job.pages}-page PDF split at {pagesPerChunk || "?"} pages per file
+                  produces{" "}
+                  <span className="text-white">
+                    {pagesPerChunk && parseInt(pagesPerChunk, 10) > 0
+                      ? Math.ceil(job.pages / parseInt(pagesPerChunk, 10))
+                      : "?"}
+                  </span>{" "}
+                  files (last one may be smaller).
+                </p>
+              </div>
+            )}
+
+            {mode === "by-size" && (
+              <div className="mt-4 max-w-sm">
+                <label className="text-sm text-muted">Maximum size per file</label>
+                <div className="flex items-center gap-2 mt-2">
+                  <input
+                    type="number" inputMode="decimal" min="0.1" step="0.1"
+                    value={mbPerChunk}
+                    onChange={(e) => setMbPerChunk(e.target.value)}
+                    className="flex-1 bg-panel border border-white/10 rounded-md px-4 py-2.5 font-mono focus:outline-none focus:border-accent"
+                  />
+                  <span className="text-sm text-muted">MB</span>
+                </div>
+                <p className="text-xs text-muted mt-2">
+                  Pages are grouped one chunk at a time, growing each chunk until
+                  the saved PDF would exceed the target. Each output file ends up
+                  ≤ {mbPerChunk || "?"} MB. May take a moment on big PDFs.
+                </p>
+              </div>
+            )}
+
+            {!autoMode && (
+              <PageGrid
+                jobId={job.job_id}
+                total={job.pages}
+                selected={mode === "select" ? selected : null}
+                onToggle={mode === "select" ? togglePage : undefined}
+                onView={(p) => setViewing(p)}
+              />
+            )}
+
+            {result?.notice && (
+              <div className="mt-4 flex items-start gap-3 bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 min-w-0">
+                <Info className="w-4 h-4 text-amber-300 shrink-0 mt-0.5" />
+                <div className="flex-1 min-w-0 text-sm text-amber-100/90 break-words">
+                  {result.notice}
+                </div>
+              </div>
+            )}
+
+            {result?.chunks && result.chunks.length > 0 && (
+              <div className="mt-4 bg-panel/60 border border-white/5 rounded-lg p-4 min-w-0">
+                <div className="text-xs uppercase tracking-wider text-muted mb-3">
+                  {result.chunks.length} output{result.chunks.length === 1 ? "" : "s"}
+                </div>
+                <ul className="space-y-1.5">
+                  {result.chunks.map((c) => (
+                    <li key={c.index} className="flex items-center gap-3 text-sm bg-panel2/60 rounded px-3 py-2">
+                      <span className="font-mono text-xs w-6 text-muted">{c.index}</span>
+                      <span className="flex-1 min-w-0 truncate">
+                        pages <span className="font-mono text-white">{c.pages}</span>
+                        <span className="text-muted"> · {c.page_count} pg</span>
+                      </span>
+                      <span className="font-mono text-xs text-emerald-300">
+                        {humanBytes(c.size)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
 
           <SidePanel error={error}>

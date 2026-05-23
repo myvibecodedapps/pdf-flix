@@ -60,14 +60,32 @@ export async function mergePdfs(files: File[]): Promise<{ job_id: string; downlo
   return jfetch("/api/merge", { method: "POST", body: fd });
 }
 
-export async function splitJob(jobId: string, ranges: string, mode: "zip" | "combined" = "zip") {
+export type Chunk = { index: number; pages: string; page_count: number; size: number };
+
+export type SplitResult = {
+  download: string;
+  filename: string;
+  chunks?: Chunk[];
+  notice?: string | null;
+};
+
+export type SplitMode = "zip" | "combined" | "every-n" | "by-size";
+
+export async function splitJob(
+  jobId: string,
+  opts: {
+    mode: SplitMode;
+    ranges?: string;
+    pages_per_chunk?: number;
+    size_per_chunk_mb?: number;
+  },
+): Promise<SplitResult> {
   const fd = new FormData();
-  fd.append("ranges", ranges);
-  fd.append("mode", mode);
-  return jfetch<{ download: string; filename: string }>(
-    `/api/jobs/${jobId}/split`,
-    { method: "POST", body: fd },
-  );
+  fd.append("mode", opts.mode);
+  if (opts.ranges !== undefined) fd.append("ranges", opts.ranges);
+  if (opts.pages_per_chunk !== undefined) fd.append("pages_per_chunk", String(opts.pages_per_chunk));
+  if (opts.size_per_chunk_mb !== undefined) fd.append("size_per_chunk_mb", String(opts.size_per_chunk_mb));
+  return jfetch<SplitResult>(`/api/jobs/${jobId}/split`, { method: "POST", body: fd });
 }
 
 export async function reorderJob(jobId: string, order: number[]) {

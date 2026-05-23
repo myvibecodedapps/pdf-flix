@@ -202,22 +202,173 @@ def _render_page_jpeg(job_id: str, page: int, target_w: int, quality: int) -> Fi
     return FileResponse(cache, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=3600"})
 
 
+def _chunk_meta(chunk_files: list[Path], page_groups: list[list[int]]) -> list[dict]:
+    return [
+        {
+            "index": i + 1,
+            "pages": _fmt_pages(page_groups[i]),
+            "page_count": len(page_groups[i]),
+            "size": p.stat().st_size,
+        }
+        for i, p in enumerate(chunk_files)
+    ]
+
+
+def _fmt_pages(pages_1idx: list[int]) -> str:
+    """Collapse a sorted list of 1-indexed page numbers into a ranges string."""
+    if not pages_1idx:
+        return ""
+    out, s, p = [], pages_1idx[0], pages_1idx[0]
+    for x in pages_1idx[1:]:
+        if x == p + 1:
+            p = x
+        else:
+            out.append(f"{s}" if s == p else f"{s}-{p}")
+            s = p = x
+    out.append(f"{s}" if s == p else f"{s}-{p}")
+    return ",".join(out)
+
+
+def _zip_chunks(out_files: list[Path], bundle: Path, base: str) -> Path:
+    with zipfile.ZipFile(bundle, "w", zipfile.ZIP_DEFLATED) as zf:
+        for i, f in enumerate(out_files, 1):
+            zf.write(f, arcname=f"{base}-part-{i:03d}.pdf")
+    return bundle
+
+
 @app.post("/api/jobs/{job_id}/split")
-async def split(job_id: str, ranges: str = Form(...), mode: str = Form("zip")):
+async def split(
+    job_id: str,
+    mode: str = Form("zip"),
+    ranges: str = Form(""),
+    pages_per_chunk: int = Form(0),
+    size_per_chunk_mb: float = Form(0.0),
+):
     """Split.
 
-    mode = "zip"      → one PDF per range, bundled in a zip (or a single PDF when there's only one range)
-    mode = "combined" → flatten all ranges into one PDF (used by "Pick pages")
+    mode = "zip"       → one PDF per range, bundled in a zip (or single PDF if one range)
+    mode = "combined"  → flatten all ranges into one PDF (used by "Pick pages")
+    mode = "every-n"   → chunk into PDFs of pages_per_chunk pages each
+    mode = "by-size"   → chunk into PDFs each ≤ size_per_chunk_mb (binary-search per chunk)
     """
     jdir = _safe_job_dir(job_id)
     src = jdir / "input.pdf"
     meta = json.loads((jdir / "meta.json").read_text())
-    groups = _parse_ranges(ranges, meta["pages"])
     base = Path(meta["filename"]).stem
     ts = _ts()
+    total_pages = int(meta["pages"])
+
+    # ---------- every-n: N pages per chunk ----------
+    if mode == "every-n":
+        if pages_per_chunk < 1:
+            raise HTTPException(400, "pages_per_chunk must be at least 1")
+        page_groups: list[list[int]] = []
+        cursor = 1
+        while cursor <= total_pages:
+            end = min(cursor + pages_per_chunk - 1, total_pages)
+            page_groups.append(list(range(cursor, end + 1)))
+            cursor = end + 1
+        out_files: list[Path] = []
+        with pikepdf.open(src) as pdf:
+            for idx, pages in enumerate(page_groups, 1):
+                out = jdir / f"part-{ts}-{idx:03d}.pdf"
+                with pikepdf.new() as new_pdf:
+                    for p in pages:
+                        new_pdf.pages.append(pdf.pages[p - 1])
+                    new_pdf.save(out)
+                out_files.append(out)
+        if len(out_files) == 1:
+            return {
+                "download": f"/api/jobs/{job_id}/download/{out_files[0].name}",
+                "filename": f"{base}-pages-{ts}.pdf",
+                "chunks": _chunk_meta(out_files, page_groups),
+            }
+        bundle = jdir / f"split-bypages-{pages_per_chunk}-{ts}.zip"
+        _zip_chunks(out_files, bundle, base)
+        return {
+            "download": f"/api/jobs/{job_id}/download/{bundle.name}",
+            "filename": f"{base}-split-{pages_per_chunk}p-{ts}.zip",
+            "chunks": _chunk_meta(out_files, page_groups),
+        }
+
+    # ---------- by-size: each chunk ≤ N MB ----------
+    if mode == "by-size":
+        if size_per_chunk_mb <= 0:
+            raise HTTPException(400, "size_per_chunk_mb must be > 0")
+        target_bytes = int(size_per_chunk_mb * 1024 * 1024)
+        out_files = []
+        page_groups = []
+        overflows: list[int] = []
+        trial = jdir / f"trial-{ts}.pdf"
+        with pikepdf.open(src) as pdf:
+            cursor = 0  # 0-indexed
+            chunk_idx = 1
+            while cursor < total_pages:
+                # Binary search: largest k ≥ 1 such that pages [cursor..cursor+k-1]
+                # saved as a PDF is ≤ target_bytes.
+                lo, hi = 1, total_pages - cursor
+                best_k = 1
+                fit_found = False
+                while lo <= hi:
+                    k = (lo + hi) // 2
+                    with pikepdf.new() as new_pdf:
+                        for p in range(cursor, cursor + k):
+                            new_pdf.pages.append(pdf.pages[p])
+                        new_pdf.save(trial)
+                    sz = trial.stat().st_size
+                    if sz <= target_bytes:
+                        best_k = k
+                        fit_found = True
+                        lo = k + 1
+                    else:
+                        hi = k - 1
+                # Build final chunk
+                out = jdir / f"part-{ts}-{chunk_idx:03d}.pdf"
+                with pikepdf.new() as new_pdf:
+                    for p in range(cursor, cursor + best_k):
+                        new_pdf.pages.append(pdf.pages[p])
+                    new_pdf.save(out)
+                if not fit_found:
+                    overflows.append(chunk_idx)
+                out_files.append(out)
+                page_groups.append(list(range(cursor + 1, cursor + best_k + 1)))
+                cursor += best_k
+                chunk_idx += 1
+        trial.unlink(missing_ok=True)
+
+        notice: Optional[str] = None
+        if overflows:
+            biggest = max(out_files[i - 1].stat().st_size for i in overflows)
+            notice = (
+                f"{len(overflows)} chunk(s) couldn't fit ≤ {size_per_chunk_mb} MB "
+                f"because a single page is bigger than the target "
+                f"(largest: {biggest / 1024 / 1024:.2f} MB). Consider compressing "
+                f"the PDF first."
+            )
+
+        if len(out_files) == 1:
+            return {
+                "download": f"/api/jobs/{job_id}/download/{out_files[0].name}",
+                "filename": f"{base}-pages-{ts}.pdf",
+                "chunks": _chunk_meta(out_files, page_groups),
+                "notice": notice,
+            }
+        bundle = jdir / f"split-bysize-{int(size_per_chunk_mb*10)}dMB-{ts}.zip"
+        _zip_chunks(out_files, bundle, base)
+        return {
+            "download": f"/api/jobs/{job_id}/download/{bundle.name}",
+            "filename": f"{base}-split-{int(size_per_chunk_mb*10)}dMB-{ts}.zip"
+                        .replace("dMB", "dMB"),
+            "chunks": _chunk_meta(out_files, page_groups),
+            "notice": notice,
+        }
+
+    # ---------- existing zip / combined modes need ranges ----------
+    if not ranges.strip():
+        raise HTTPException(400, "ranges required for this mode")
+    groups = _parse_ranges(ranges, total_pages)
 
     if mode == "combined":
-        # All selected pages, in input order, into a single PDF.
         out = jdir / f"pages-{ts}.pdf"
         with pikepdf.open(src) as pdf, pikepdf.new() as new_pdf:
             for pages in groups:
@@ -230,7 +381,7 @@ async def split(job_id: str, ranges: str = Form(...), mode: str = Form("zip")):
         }
 
     # zip mode
-    out_files: list[Path] = []
+    out_files = []
     with pikepdf.open(src) as pdf:
         for idx, pages in enumerate(groups, 1):
             out = jdir / f"part-{ts}-{idx:03d}.pdf"
@@ -239,17 +390,13 @@ async def split(job_id: str, ranges: str = Form(...), mode: str = Form("zip")):
                     new_pdf.pages.append(pdf.pages[p - 1])
                 new_pdf.save(out)
             out_files.append(out)
-
     if len(out_files) == 1:
         return {
             "download": f"/api/jobs/{job_id}/download/{out_files[0].name}",
             "filename": f"{base}-pages-{ts}.pdf",
         }
-
     bundle = jdir / f"split-{ts}.zip"
-    with zipfile.ZipFile(bundle, "w", zipfile.ZIP_DEFLATED) as zf:
-        for i, f in enumerate(out_files, 1):
-            zf.write(f, arcname=f"{base}-part-{i:03d}.pdf")
+    _zip_chunks(out_files, bundle, base)
     return {
         "download": f"/api/jobs/{job_id}/download/{bundle.name}",
         "filename": f"{base}-split-{ts}.zip",
