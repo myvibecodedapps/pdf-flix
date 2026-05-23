@@ -36,6 +36,10 @@ JOBS_DIR = Path(os.environ.get("PDFFLIX_JOBS_DIR", "/tmp/pdfflix-jobs"))
 STATIC_DIR = Path(os.environ.get("PDFFLIX_STATIC_DIR", str(ROOT / "static")))
 JOB_TTL_SEC = int(os.environ.get("PDFFLIX_JOB_TTL", "3600"))  # 1 hour
 MAX_UPLOAD_MB = int(os.environ.get("PDFFLIX_MAX_UPLOAD_MB", "500"))
+JANITOR_INTERVAL_SEC = int(os.environ.get("PDFFLIX_JANITOR_INTERVAL", "60"))
+# Hard ceiling on total JOBS_DIR size. When exceeded, oldest jobs are
+# evicted until we're back under the cap. Defaults to 2 GiB.
+JOBS_DIR_CAP_BYTES = int(os.environ.get("PDFFLIX_JOBS_CAP_MB", "2048")) * 1024 * 1024
 
 JOBS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -62,6 +66,42 @@ def _ts() -> str:
     """Local-time stamp safe in filenames. Sorts lexicographically by time and
     keeps repeated outputs of the same operation from colliding."""
     return time.strftime("%Y%m%d-%H%M%S")
+
+
+def _evict_glob(jdir: Path, pattern: str, keep: Path | None = None) -> int:
+    """Delete files in `jdir` matching `pattern`, optionally keeping `keep`.
+    Used to clean up per-operation intermediates (compress attempts, OCR
+    pre-clean copies, merge inputs) without touching cached thumbnails or
+    final outputs. Returns count deleted."""
+    n = 0
+    for f in jdir.glob(pattern):
+        if not f.is_file():
+            continue
+        if keep is not None and f.resolve() == keep.resolve():
+            continue
+        try:
+            f.unlink()
+            n += 1
+        except OSError as e:
+            log.warning("evict %s: %s", f, e)
+    return n
+
+
+def _dir_bytes(p: Path) -> int:
+    """Recursive byte size of a directory."""
+    total = 0
+    try:
+        for entry in p.iterdir():
+            try:
+                if entry.is_dir():
+                    total += _dir_bytes(entry)
+                else:
+                    total += entry.stat().st_size
+            except OSError:
+                pass
+    except OSError:
+        pass
+    return total
 
 
 async def _save_upload(file: UploadFile, dest: Path, max_mb: int = MAX_UPLOAD_MB) -> int:
@@ -120,17 +160,53 @@ async def lifespan(app: FastAPI):
     stop = asyncio.Event()
 
     async def janitor():
+        """Two-phase sweep:
+        1. TTL sweep — evict jobs that haven't been touched in JOB_TTL_SEC.
+        2. Size sweep — if JOBS_DIR is still over JOBS_DIR_CAP_BYTES, evict
+           oldest jobs (by mtime) until back under the cap. This protects the
+           Pi's SD card from filling up if someone uploads a lot in quick
+           succession (TTL alone wouldn't help)."""
         while not stop.is_set():
             try:
+                # Phase 1: TTL eviction
                 cutoff = time.time() - JOB_TTL_SEC
+                ttl_evicted = 0
+                jobs: list[tuple[Path, float, int]] = []
                 for d in JOBS_DIR.iterdir():
-                    if d.is_dir() and d.stat().st_mtime < cutoff:
+                    if not d.is_dir():
+                        continue
+                    try:
+                        mtime = d.stat().st_mtime
+                    except OSError:
+                        continue
+                    if mtime < cutoff:
                         shutil.rmtree(d, ignore_errors=True)
-                        log.info("janitor: evicted %s", d.name)
+                        ttl_evicted += 1
+                        continue
+                    jobs.append((d, mtime, _dir_bytes(d)))
+
+                # Phase 2: size-cap eviction (oldest first)
+                total = sum(sz for _, _, sz in jobs)
+                size_evicted = 0
+                if total > JOBS_DIR_CAP_BYTES:
+                    jobs.sort(key=lambda x: x[1])  # oldest first
+                    for d, _, sz in jobs:
+                        if total <= JOBS_DIR_CAP_BYTES:
+                            break
+                        shutil.rmtree(d, ignore_errors=True)
+                        total -= sz
+                        size_evicted += 1
+
+                if ttl_evicted or size_evicted:
+                    log.info(
+                        "janitor: ttl_evicted=%d size_evicted=%d remaining=%d total=%dMB cap=%dMB",
+                        ttl_evicted, size_evicted, len(jobs) - size_evicted,
+                        total // 1024 // 1024, JOBS_DIR_CAP_BYTES // 1024 // 1024,
+                    )
             except Exception as e:  # noqa: BLE001
                 log.warning("janitor error: %s", e)
             try:
-                await asyncio.wait_for(stop.wait(), timeout=300)
+                await asyncio.wait_for(stop.wait(), timeout=JANITOR_INTERVAL_SEC)
             except asyncio.TimeoutError:
                 pass
 
@@ -151,6 +227,50 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 @app.get("/api/health")
 async def health():
     return {"ok": True, "max_upload_mb": MAX_UPLOAD_MB}
+
+
+@app.get("/api/status")
+async def status():
+    """Operational view: per-job sizes, total JOBS_DIR bytes used, free disk on
+    the volume, and the current cleanup settings. Useful for verifying that
+    intermediate cleanup works and that the size cap is doing its job."""
+    jobs = []
+    total = 0
+    now = time.time()
+    if JOBS_DIR.exists():
+        for d in sorted(JOBS_DIR.iterdir()):
+            if not d.is_dir():
+                continue
+            try:
+                sz = _dir_bytes(d)
+                mtime = d.stat().st_mtime
+            except OSError:
+                continue
+            total += sz
+            jobs.append({
+                "id": d.name,
+                "bytes": sz,
+                "files": sum(1 for _ in d.iterdir() if _.is_file()),
+                "age_sec": int(now - mtime),
+                "ttl_remaining_sec": max(0, JOB_TTL_SEC - int(now - mtime)),
+            })
+    try:
+        st = shutil.disk_usage(JOBS_DIR)
+        disk_free = st.free
+        disk_total = st.total
+    except Exception:  # noqa: BLE001
+        disk_free = disk_total = -1
+    return {
+        "jobs_dir": str(JOBS_DIR),
+        "job_count": len(jobs),
+        "jobs_total_bytes": total,
+        "jobs_cap_bytes": JOBS_DIR_CAP_BYTES,
+        "job_ttl_sec": JOB_TTL_SEC,
+        "janitor_interval_sec": JANITOR_INTERVAL_SEC,
+        "disk_free_bytes": disk_free,
+        "disk_total_bytes": disk_total,
+        "jobs": jobs,
+    }
 
 
 @app.post("/api/upload")
@@ -423,6 +543,10 @@ async def merge(files: List[UploadFile] = File(...)):
             with pikepdf.open(p) as src:
                 new_pdf.pages.extend(src.pages)
         new_pdf.save(out)
+    # Drop the per-file input copies — the merged PDF supersedes them and
+    # they can collectively be much larger than the output.
+    for p in saved:
+        p.unlink(missing_ok=True)
     return {
         "job_id": jid,
         "download": f"/api/jobs/{jid}/download/{out.name}",
@@ -556,6 +680,10 @@ async def compress(
             if fits:
                 final = jdir / f"compressed-target-{int(target_mb*10)}dMB-{ts}.pdf"
                 tmp.replace(final)
+                # Delete every other attempt file from this run — they're no
+                # longer useful and would otherwise occupy multiples of the
+                # final output's size on disk.
+                _evict_glob(jdir, f"compressed-target-attempt*-{ts}.pdf", keep=None)
                 saved = max(0, original_size - sz)
                 return {
                     "download": f"/api/jobs/{job_id}/download/{final.name}",
@@ -577,6 +705,8 @@ async def compress(
         out, sz, spec = best
         final = jdir / f"compressed-target-best-{ts}.pdf"
         out.replace(final)
+        # Delete all the non-winning attempt files from this run.
+        _evict_glob(jdir, f"compressed-target-attempt*-{ts}.pdf", keep=None)
         saved = max(0, original_size - sz)
         return {
             "download": f"/api/jobs/{job_id}/download/{final.name}",
@@ -776,6 +906,12 @@ async def ocr(
             "Couldn't run OCR on this PDF. Try compressing it first to "
             "normalize the format, then run OCR again."
         )
+
+    # The pre-cleaned input copy is intermediate — only useful for the OCR run
+    # that just happened. Remove it now so multiple OCR runs in the same job
+    # don't pile up Nx the input size on disk.
+    if cleaned.exists() and cleaned != out_pdf:
+        cleaned.unlink(missing_ok=True)
 
     # If ocrmypdf skipped pages because they already have a text layer,
     # the sidecar is a placeholder like "[OCR skipped on page(s) 1-12]".
