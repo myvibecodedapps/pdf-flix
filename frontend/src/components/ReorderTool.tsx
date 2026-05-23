@@ -96,7 +96,7 @@ export default function ReorderTool() {
 
       {job && (
         <div className="grid lg:grid-cols-[1fr_320px] gap-6">
-          <div>
+          <div className="min-w-0">
             <FileBadge job={job} onClear={() => { setJob(null); setSlots([]); setResult(null); }} />
 
             <div className="flex items-center gap-3 mb-4">

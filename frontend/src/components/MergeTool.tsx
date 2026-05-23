@@ -24,11 +24,17 @@ export default function MergeTool() {
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
 
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+  // One dropzone for the initial drop area, one for "Add more" — keeping them
+  // separate avoids react-dropzone's `noClick` from disabling the inline button.
+  const initialZone = useDropzone({
     onDrop: (files) => addFiles(files),
     accept: { "application/pdf": [".pdf"] },
     multiple: true,
-    noClick: items.length > 0,
+  });
+  const addMoreZone = useDropzone({
+    onDrop: (files) => addFiles(files),
+    accept: { "application/pdf": [".pdf"] },
+    multiple: true,
   });
 
   function addFiles(files: File[]) {
@@ -67,11 +73,11 @@ export default function MergeTool() {
 
       {items.length === 0 && (
         <div
-          {...getRootProps()}
+          {...initialZone.getRootProps()}
           className={`rounded-xl border-2 border-dashed cursor-pointer transition-colors p-10 text-center min-h-[220px] flex flex-col items-center justify-center
-            ${isDragActive ? "border-accent bg-accent/5" : "border-white/15 bg-panel/40 hover:border-white/30"}`}
+            ${initialZone.isDragActive ? "border-accent bg-accent/5" : "border-white/15 bg-panel/40 hover:border-white/30"}`}
         >
-          <input {...getInputProps()} />
+          <input {...initialZone.getInputProps()} />
           <div className="w-12 h-12 rounded-full bg-accent/15 flex items-center justify-center mb-3">
             <Combine className="w-6 h-6 text-accent" />
           </div>
@@ -82,7 +88,7 @@ export default function MergeTool() {
 
       {items.length > 0 && (
         <div className="grid lg:grid-cols-[1fr_320px] gap-6">
-          <div>
+          <div className="min-w-0">
             <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
               <SortableContext items={items.map((i) => i.id)} strategy={verticalListSortingStrategy}>
                 <ul className="space-y-2">
@@ -98,13 +104,16 @@ export default function MergeTool() {
               </SortableContext>
             </DndContext>
 
-            <div {...getRootProps()} className="mt-3">
-              <input {...getInputProps()} />
-              <button className="flex items-center gap-2 text-sm text-muted hover:text-white border border-dashed border-white/15 hover:border-white/30 rounded-md px-4 py-2.5 w-full justify-center transition-colors">
-                <Plus className="w-4 h-4" />
-                Add more
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={addMoreZone.open}
+              className="mt-3 flex items-center gap-2 text-sm text-muted hover:text-white border border-dashed border-white/15 hover:border-white/30 rounded-md px-4 py-2.5 w-full justify-center transition-colors"
+            >
+              <Plus className="w-4 h-4" />
+              Add more
+            </button>
+            {/* Hidden file input controlled by the "Add more" button */}
+            <input {...addMoreZone.getInputProps()} />
           </div>
 
           <SidePanel error={error}>

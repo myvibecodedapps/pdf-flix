@@ -72,12 +72,12 @@ export default function OcrTool() {
 
       {job && (
         <div className="grid lg:grid-cols-[1fr_320px] gap-6">
-          <div className="space-y-4">
+          <div className="space-y-4 min-w-0">
             <FileBadge job={job} onClear={() => { setJob(null); setResult(null); }} />
 
             <div className="bg-panel/60 border border-white/5 rounded-lg p-4 space-y-4">
               <Field label="Output">
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   {OUTPUTS.map((o) => (
                     <button
                       key={o.id}
@@ -122,9 +122,9 @@ export default function OcrTool() {
             </div>
 
             {result?.notice && (
-              <div className="flex items-start gap-3 bg-amber-500/10 border border-amber-500/30 rounded-lg p-3">
+              <div className="flex items-start gap-3 bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 min-w-0">
                 <Info className="w-4 h-4 text-amber-300 shrink-0 mt-0.5" />
-                <div className="flex-1 text-sm text-amber-100/90">
+                <div className="flex-1 min-w-0 text-sm text-amber-100/90 break-words">
                   {result.notice}
                   {!force && (
                     <button
@@ -139,11 +139,14 @@ export default function OcrTool() {
             )}
 
             {result?.preview && (
-              <div className="bg-panel/60 border border-white/5 rounded-lg p-4">
+              <div className="bg-panel/60 border border-white/5 rounded-lg p-4 min-w-0">
                 <div className="font-medium mb-2 flex items-center gap-2 text-sm">
                   <FileText className="w-4 h-4 text-accent" /> Text preview
                 </div>
-                <pre className="text-xs bg-panel2 rounded p-3 max-h-80 overflow-auto whitespace-pre-wrap leading-relaxed text-white/80">
+                <pre
+                  className="text-xs bg-panel2 rounded p-3 max-h-80 overflow-y-auto overflow-x-hidden whitespace-pre-wrap leading-relaxed text-white/80"
+                  style={{ overflowWrap: "anywhere", wordBreak: "break-word" }}
+                >
                   {result.preview}
                 </pre>
               </div>

@@ -83,7 +83,7 @@ export default function SplitTool() {
 
       {job && (
         <div className="grid lg:grid-cols-[1fr_320px] gap-6">
-          <div>
+          <div className="min-w-0">
             <FileBadge job={job} onClear={() => { setJob(null); setSelected(new Set()); setResult(null); }} />
 
             <Tabs value={mode} onChange={(v) => setMode(v as Mode)} options={[
@@ -166,12 +166,12 @@ export function Tabs<T extends string>({
   options: { id: T; label: string }[];
 }) {
   return (
-    <div className="inline-flex bg-panel rounded-md p-1 border border-white/5">
+    <div className="flex flex-wrap bg-panel rounded-md p-1 border border-white/5 w-full sm:w-auto sm:inline-flex">
       {options.map((o) => (
         <button
           key={o.id}
           onClick={() => onChange(o.id)}
-          className={`px-3.5 py-1.5 text-sm rounded-[5px] transition-colors ${
+          className={`flex-1 sm:flex-none px-3.5 py-1.5 text-sm rounded-[5px] transition-colors ${
             value === o.id ? "bg-accent text-white" : "text-muted hover:text-white"
           }`}
         >
