@@ -79,6 +79,22 @@ export async function reorderJob(jobId: string, order: number[]) {
   );
 }
 
+export async function compressJob(jobId: string, level: string) {
+  const fd = new FormData();
+  fd.append("level", level);
+  return jfetch<{
+    download: string;
+    filename: string;
+    level: string;
+    level_label: string;
+    original_size: number;
+    new_size: number;
+    saved_bytes: number;
+    ratio_percent: number;
+    notice?: string | null;
+  }>(`/api/jobs/${jobId}/compress`, { method: "POST", body: fd });
+}
+
 export async function ocrJob(
   jobId: string,
   output: "pdf" | "text" | "both",

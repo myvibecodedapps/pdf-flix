@@ -283,6 +283,83 @@ async def merge(files: List[UploadFile] = File(...)):
     }
 
 
+_COMPRESS_LEVELS = {
+    # Ghostscript PDFSETTINGS presets, mapped to human labels for the UI.
+    # Lower preset = smaller file = lower quality.
+    "strong":  ("/screen",   "Strong",  "~72 dpi · smallest file"),
+    "medium":  ("/ebook",    "Medium",  "~150 dpi · balanced"),
+    "light":   ("/printer",  "Light",   "~300 dpi · print quality"),
+    "minimal": ("/prepress", "Minimal", "~300 dpi · near-original"),
+}
+
+
+@app.post("/api/jobs/{job_id}/compress")
+async def compress(job_id: str, level: str = Form("medium")):
+    """Reduce PDF size with Ghostscript. level ∈ strong|medium|light|minimal."""
+    jdir = _safe_job_dir(job_id)
+    src = jdir / "input.pdf"
+    if not src.exists():
+        raise HTTPException(404, "input missing")
+    if level not in _COMPRESS_LEVELS:
+        raise HTTPException(400, f"invalid level (got {level!r})")
+
+    gs_setting, label, _ = _COMPRESS_LEVELS[level]
+    meta = json.loads((jdir / "meta.json").read_text())
+    base = Path(meta["filename"]).stem
+    ts = _ts()
+    out = jdir / f"compressed-{level}-{ts}.pdf"
+
+    cmd = [
+        "gs",
+        "-sDEVICE=pdfwrite",
+        "-dCompatibilityLevel=1.5",
+        f"-dPDFSETTINGS={gs_setting}",
+        "-dNOPAUSE",
+        "-dQUIET",
+        "-dBATCH",
+        "-dDetectDuplicateImages=true",
+        "-dCompressFonts=true",
+        f"-sOutputFile={out}",
+        str(src),
+    ]
+    log.info("compress cmd: %s", " ".join(cmd))
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    _stdout, stderr = await proc.communicate()
+    if proc.returncode != 0 or not out.exists():
+        log.error("compress failed: %s", stderr.decode("utf-8", "replace")[-2000:])
+        raise HTTPException(500, f"compress failed: {stderr.decode('utf-8','replace')[-400:]}")
+
+    original_size = src.stat().st_size
+    new_size = out.stat().st_size
+    saved = max(0, original_size - new_size)
+    ratio = round((saved / original_size) * 100, 1) if original_size else 0.0
+
+    notice: Optional[str] = None
+    if new_size >= original_size:
+        notice = (
+            "The compressed file is the same size or larger than the original — "
+            "this PDF is already heavily compressed, or contains mostly vector / "
+            "text content that can't shrink further. Try a stronger level, or "
+            "keep the original."
+        )
+
+    return {
+        "download": f"/api/jobs/{job_id}/download/{out.name}",
+        "filename": f"{base}-compressed-{level}-{ts}.pdf",
+        "level": level,
+        "level_label": label,
+        "original_size": original_size,
+        "new_size": new_size,
+        "saved_bytes": saved,
+        "ratio_percent": ratio,
+        "notice": notice,
+    }
+
+
 @app.post("/api/jobs/{job_id}/reorder")
 async def reorder(job_id: str, order: str = Form(...)):
     """order = JSON list of 1-indexed page numbers (may include duplicates / subset)."""

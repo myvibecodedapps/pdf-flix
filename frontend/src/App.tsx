@@ -1,17 +1,19 @@
 import { useState } from "react";
-import { Scissors, Combine, ListOrdered, ScanText, Lock, ArrowLeft } from "lucide-react";
+import { Scissors, Combine, ListOrdered, ScanText, Shrink, Lock, ArrowLeft } from "lucide-react";
 import SplitTool from "./components/SplitTool";
 import MergeTool from "./components/MergeTool";
 import ReorderTool from "./components/ReorderTool";
 import OcrTool from "./components/OcrTool";
+import CompressTool from "./components/CompressTool";
 
-export type ToolId = "home" | "split" | "merge" | "reorder" | "ocr";
+export type ToolId = "home" | "split" | "merge" | "reorder" | "ocr" | "compress";
 
 const TOOLS = [
-  { id: "split" as const, title: "Split", icon: Scissors },
-  { id: "merge" as const, title: "Merge", icon: Combine },
-  { id: "reorder" as const, title: "Reorder", icon: ListOrdered },
-  { id: "ocr" as const, title: "OCR", icon: ScanText },
+  { id: "split" as const,    title: "Split",    icon: Scissors },
+  { id: "merge" as const,    title: "Merge",    icon: Combine },
+  { id: "reorder" as const,  title: "Reorder",  icon: ListOrdered },
+  { id: "compress" as const, title: "Compress", icon: Shrink },
+  { id: "ocr" as const,      title: "OCR",      icon: ScanText },
 ];
 
 export default function App() {
@@ -48,6 +50,7 @@ export default function App() {
             {tool === "split" && <SplitTool />}
             {tool === "merge" && <MergeTool />}
             {tool === "reorder" && <ReorderTool />}
+            {tool === "compress" && <CompressTool />}
             {tool === "ocr" && <OcrTool />}
           </div>
         )}
@@ -63,7 +66,7 @@ function Home({ onPick }: { onPick: (t: ToolId) => void }) {
         <h1 className="text-4xl sm:text-5xl font-bold tracking-tight">PDFflix</h1>
         <p className="text-muted mt-3">All local · No cloud · Full privacy</p>
       </div>
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 sm:gap-4">
         {TOOLS.map((t) => {
           const Icon = t.icon;
           return (
