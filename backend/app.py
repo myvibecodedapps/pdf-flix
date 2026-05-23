@@ -350,9 +350,16 @@ def _fmt_pages(pages_1idx: list[int]) -> str:
 
 
 def _zip_chunks(out_files: list[Path], bundle: Path, base: str) -> Path:
+    """Zip the per-chunk PDFs and delete the standalone files. The zip is the
+    user-facing download, so keeping both was just duplicated bytes on disk."""
     with zipfile.ZipFile(bundle, "w", zipfile.ZIP_DEFLATED) as zf:
         for i, f in enumerate(out_files, 1):
             zf.write(f, arcname=f"{base}-part-{i:03d}.pdf")
+    for f in out_files:
+        try:
+            f.unlink()
+        except OSError as e:
+            log.warning("evict part %s: %s", f, e)
     return bundle
 
 
@@ -949,6 +956,10 @@ async def ocr(
             zf.write(out_pdf, arcname=f"{base}-ocr.pdf")
             if sidecar.exists():
                 zf.write(sidecar, arcname=f"{base}-ocr.txt")
+        # The zip IS the download — the standalone .pdf and .txt are now
+        # redundant duplicates on disk. Remove them.
+        out_pdf.unlink(missing_ok=True)
+        sidecar.unlink(missing_ok=True)
         return {
             "download": f"/api/jobs/{job_id}/download/{bundle.name}",
             "filename": f"{base}-ocr-{ts}.zip",
