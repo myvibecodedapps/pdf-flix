@@ -35,7 +35,6 @@ export default function OcrTool() {
 
   const [output, setOutput] = useState<Output>("pdf");
   const [language, setLanguage] = useState("eng");
-  const [force, setForce] = useState(false);
 
   const [result, setResult] = useState<{ download: string; filename: string; preview?: string; notice?: string | null } | null>(null);
 
@@ -56,7 +55,9 @@ export default function OcrTool() {
     if (!job) return;
     setBusy(true); setError(null); setResult(null);
     try {
-      setResult(await ocrJob(job.job_id, output, language, force));
+      // Always force-OCR. Defaulting to skip-text preserved bad/junk text
+      // layers, which is the wrong behavior for a tool called "OCR".
+      setResult(await ocrJob(job.job_id, output, language, true));
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -107,18 +108,6 @@ export default function OcrTool() {
                 </select>
               </Field>
 
-              <label className="flex items-start gap-2.5 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={force}
-                  onChange={(e) => setForce(e.target.checked)}
-                  className="mt-0.5 accent-accent"
-                />
-                <div>
-                  <div className="text-sm font-medium">Force OCR</div>
-                  <div className="text-xs text-muted">Re-recognize pages that already contain text.</div>
-                </div>
-              </label>
             </div>
 
             {result?.notice && (
@@ -126,14 +115,6 @@ export default function OcrTool() {
                 <Info className="w-4 h-4 text-amber-300 shrink-0 mt-0.5" />
                 <div className="flex-1 min-w-0 text-sm text-amber-100/90 break-words">
                   {result.notice}
-                  {!force && (
-                    <button
-                      onClick={() => { setForce(true); run(); }}
-                      className="ml-2 text-xs font-semibold text-amber-200 hover:text-white bg-amber-500/20 hover:bg-amber-500/40 border border-amber-400/40 px-2 py-0.5 rounded transition-colors"
-                    >
-                      Force OCR
-                    </button>
-                  )}
                 </div>
               </div>
             )}

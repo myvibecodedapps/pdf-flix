@@ -664,7 +664,10 @@ async def ocr(
     job_id: str,
     output: str = Form("pdf"),  # pdf | text | both
     language: str = Form("eng"),
-    force: bool = Form(False),
+    force: bool = Form(True),  # default True — always re-recognize, never preserve a
+                               # possibly-junk existing text layer. Kept as a Form arg
+                               # so callers can opt out via force=false if they really
+                               # want the old --skip-text behavior.
 ):
     """Run OCR. output=pdf returns searchable PDF; text returns .txt; both returns .zip."""
     jdir = _safe_job_dir(job_id)
@@ -691,10 +694,22 @@ async def ocr(
     except Exception as e:  # noqa: BLE001
         log.warning("ocr: pikepdf pre-clean failed (%s), using original", e)
 
-    # 2) Two-stage retry. The default --optimize 1 produces smaller files but
-    #    its qpdf-based optimization step is the most common source of the
-    #    "Output file: The generated PDF is INVALID" verdict. On failure, retry
-    #    with --optimize 0 and --clean, which is a much more permissive path.
+    # 2) Retry ladder.
+    #
+    #    Many "INVALID PDF" failures are caused by a *broken* existing text
+    #    layer — e.g. a previous bad OCR pass with garbled ToUnicode tables.
+    #    When the user picked the default (skip-text), ocrmypdf tries to keep
+    #    that broken layer and then fails its own QA. The right fix is to
+    #    quietly fall back to re-recognizing every page from scratch
+    #    (--force-ocr), which sidesteps the broken layer entirely. The user
+    #    asked for "Run OCR" — they don't need to know we tried two strategies.
+    #
+    #    Order:
+    #      1. requested mode + default optimization
+    #      2. requested mode + safer optimization (--optimize 0 --clean)
+    #      3. force-ocr (only if user didn't already pick it) — last rescue
+    #         before the no-OCR fallback. Same result as the user enabling
+    #         "Force OCR" themselves.
     base_cmd = [
         "ocrmypdf",
         "-l", language,
@@ -702,15 +717,18 @@ async def ocr(
         "--output-type", "pdf",
         "--jobs", str(max(1, os.cpu_count() or 2)),
     ]
-    base_cmd.append("--force-ocr" if force else "--skip-text")
+    requested_flag = "--force-ocr" if force else "--skip-text"
 
     attempts: list[tuple[str, list[str]]] = [
-        ("default (--optimize 1)",         ["--optimize", "1"]),
-        ("safer (--optimize 0 --clean)",   ["--optimize", "0", "--clean"]),
+        ("default",        ["--optimize", "1", requested_flag]),
+        ("safer",          ["--optimize", "0", "--clean", requested_flag]),
     ]
+    if not force:
+        attempts.append(("auto-force-ocr", ["--optimize", "0", "--clean", "--force-ocr"]))
 
     last_err = ""
     ocr_succeeded = False
+    used_attempt = ""
     for label, extra in attempts:
         cmd = base_cmd + extra + [str(use_src), str(out_pdf)]
         log.info("ocr cmd [%s]: %s", label, " ".join(cmd))
@@ -721,6 +739,7 @@ async def ocr(
         last_err = stderr.decode("utf-8", "replace")
         if proc.returncode == 0 and out_pdf.exists() and out_pdf.stat().st_size > 0:
             ocr_succeeded = True
+            used_attempt = label
             log.info("ocr: succeeded via %s", label)
             break
         log.warning("ocr attempt '%s' failed (rc=%s): %s", label, proc.returncode, last_err[-600:])
@@ -729,10 +748,10 @@ async def ocr(
     ocr_fallback_notice: Optional[str] = None
 
     if not ocr_succeeded:
-        # 3) Graceful degradation: extract whatever text the input already has
+        # 3) Last-resort fallback: extract whatever text the input already has
         #    via PyMuPDF, write it as the sidecar, and (if user wanted a PDF)
-        #    serve the cleaned input as-is. The user at least gets the text.
-        log.warning("ocr: both attempts failed, falling back to text extraction")
+        #    serve the cleaned input as-is. The user at least gets *something*.
+        log.warning("ocr: all attempts failed, falling back to text extraction")
         text_parts: list[str] = []
         try:
             doc = fitz.open(use_src)
@@ -745,20 +764,17 @@ async def ocr(
             log.error("ocr fallback text extraction failed: %s", e)
             raise HTTPException(
                 500,
-                "OCR failed and the PDF couldn't be read for text extraction. "
-                "Try compressing the PDF first, or re-saving it from the source."
+                "Couldn't run OCR on this PDF and couldn't read it for text "
+                "extraction either. The file may be corrupted or "
+                "password-protected. Try compressing it first to normalize "
+                "the format."
             )
         sidecar.write_text("\n".join(text_parts))
         if output != "text":
-            # Copy cleaned input as the "ocr.pdf" so download links still work.
             shutil.copyfile(use_src, out_pdf)
         ocr_fallback_notice = (
-            "OCR couldn't produce a searchable PDF for this file (ocrmypdf "
-            "rejected its own output as INVALID even after a permissive retry). "
-            "PDFflix fell back to extracting any existing text layer with "
-            "PyMuPDF — you'll get whatever text was already in the PDF. "
-            "If the PDF is purely scanned images, try Compress first to "
-            "normalize it, then run OCR again."
+            "Couldn't run OCR on this PDF. Try compressing it first to "
+            "normalize the format, then run OCR again."
         )
 
     # If ocrmypdf skipped pages because they already have a text layer,
@@ -770,16 +786,16 @@ async def ocr(
     if ocr_fallback_notice:
         notice = ocr_fallback_notice
     elif skipped_pages:
+        # Only reachable when an API caller passes force=false explicitly — the
+        # UI always sends force=true now. Keep the message factual.
         if skipped_pages == "all":
             notice = (
-                "This PDF already has a searchable text layer on every page, so OCR "
-                "had nothing to do. The .txt download contains the existing text. "
-                "Enable “Force OCR” to re-recognize the pages from scratch."
+                "This PDF already had selectable text on every page, so the existing "
+                "text was kept instead of re-recognizing."
             )
         else:
             notice = (
-                f"OCR skipped {skipped_pages} (already had a text layer). The remaining "
-                "pages were OCR'd. Existing text was merged into the .txt download."
+                f"Kept existing text for {skipped_pages}. The remaining pages were OCR'd."
             )
 
     preview = sidecar_text[:5000]
