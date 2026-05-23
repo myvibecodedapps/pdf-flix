@@ -283,75 +283,198 @@ async def merge(files: List[UploadFile] = File(...)):
     }
 
 
-_COMPRESS_LEVELS = {
-    # Ghostscript PDFSETTINGS presets, mapped to human labels for the UI.
-    # Lower preset = smaller file = lower quality.
-    "strong":  ("/screen",   "Strong",  "~72 dpi · smallest file"),
-    "medium":  ("/ebook",    "Medium",  "~150 dpi · balanced"),
-    "light":   ("/printer",  "Light",   "~300 dpi · print quality"),
-    "minimal": ("/prepress", "Minimal", "~300 dpi · near-original"),
+# --- Compression specs -------------------------------------------------------
+# Each spec is a dict the helper translates into Ghostscript flags. A spec with
+# gs="/screen" only uses the preset defaults; one with explicit dpi/qf forces
+# image downsampling and JPEG re-encoding at the given quality factor.
+_LEVELS: dict[str, dict] = {
+    "strong":  {"gs": "/screen",   "dpi": None, "qf": None, "label": "Strong",
+                "sub": "~72 dpi · smallest file"},
+    "medium":  {"gs": "/ebook",    "dpi": None, "qf": None, "label": "Medium",
+                "sub": "~150 dpi · balanced"},
+    "light":   {"gs": "/printer",  "dpi": None, "qf": None, "label": "Light",
+                "sub": "~300 dpi · print quality"},
+    "minimal": {"gs": "/prepress", "dpi": None, "qf": None, "label": "Minimal",
+                "sub": "~300 dpi · near-original"},
+    "extreme": {"gs": "/screen",   "dpi": 72,   "qf": 2.4,  "label": "Extreme",
+                "sub": "72 dpi, forced JPEG re-encode"},
 }
+
+# Ladder used by target-size mode. Highest quality first; stop at first
+# attempt that fits the requested size.
+_TARGET_LADDER: list[dict] = [
+    {"gs": "/ebook",   "dpi": None, "qf": None, "label": "Medium (150 dpi)"},
+    {"gs": "/screen",  "dpi": None, "qf": None, "label": "Strong (72 dpi)"},
+    {"gs": "/screen",  "dpi": 72,   "qf": 2.0,  "label": "Extreme 72 dpi"},
+    {"gs": "/screen",  "dpi": 60,   "qf": 2.4,  "label": "Extreme 60 dpi"},
+    {"gs": "/screen",  "dpi": 50,   "qf": 2.4,  "label": "Extreme 50 dpi"},
+    {"gs": "/screen",  "dpi": 40,   "qf": 2.5,  "label": "Extreme 40 dpi"},
+    {"gs": "/screen",  "dpi": 30,   "qf": 2.5,  "label": "Extreme 30 dpi"},
+    {"gs": "/screen",  "dpi": 24,   "qf": 3.0,  "label": "Extreme 24 dpi (last resort)"},
+]
+
+
+async def _run_gs_compress(src: Path, out: Path, spec: dict) -> None:
+    """Run ghostscript pdfwrite with knobs from `spec`."""
+    cmd = [
+        "gs", "-sDEVICE=pdfwrite",
+        "-dCompatibilityLevel=1.5",
+        f"-dPDFSETTINGS={spec['gs']}",
+        "-dNOPAUSE", "-dQUIET", "-dBATCH",
+        "-dDetectDuplicateImages=true",
+        "-dCompressFonts=true",
+    ]
+    if spec.get("dpi") is not None:
+        dpi = int(spec["dpi"])
+        cmd += [
+            "-dDownsampleColorImages=true",
+            "-dColorImageDownsampleType=/Average",
+            f"-dColorImageResolution={dpi}",
+            "-dColorImageDownsampleThreshold=1.0",
+            "-dDownsampleGrayImages=true",
+            "-dGrayImageDownsampleType=/Average",
+            f"-dGrayImageResolution={dpi}",
+            "-dGrayImageDownsampleThreshold=1.0",
+            "-dDownsampleMonoImages=true",
+            "-dMonoImageDownsampleType=/Subsample",
+            f"-dMonoImageResolution={max(dpi * 2, 150)}",
+            "-dMonoImageDownsampleThreshold=1.0",
+        ]
+    # We skip explicit JPEG QFactor dicts here — passing nested PostScript dicts
+    # through the gs command line is fragile (parse errors), and /screen / /ebook
+    # already use DCTEncode, so DPI downsampling alone is the dominant lever.
+    if spec.get("qf") is not None:
+        cmd += [
+            "-dAutoFilterColorImages=false",
+            "-dAutoFilterGrayImages=false",
+            "-dColorImageFilter=/DCTEncode",
+            "-dGrayImageFilter=/DCTEncode",
+        ]
+    cmd += [f"-sOutputFile={out}", str(src)]
+    log.info("gs: %s", " ".join(cmd))
+    proc = await asyncio.create_subprocess_exec(
+        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    _stdout, stderr = await proc.communicate()
+    if proc.returncode != 0 or not out.exists() or out.stat().st_size == 0:
+        raise RuntimeError(stderr.decode("utf-8", "replace")[-400:])
 
 
 @app.post("/api/jobs/{job_id}/compress")
-async def compress(job_id: str, level: str = Form("medium")):
-    """Reduce PDF size with Ghostscript. level ∈ strong|medium|light|minimal."""
+async def compress(
+    job_id: str,
+    level: str = Form("medium"),
+    target_mb: float = Form(0.0),
+):
+    """Reduce PDF size.
+
+    If `target_mb > 0`: iterate through the ladder, return the first attempt
+    whose output is ≤ target_mb. The `level` arg is ignored in this mode.
+
+    Otherwise: single-shot at the requested level
+    (strong | medium | light | minimal | extreme).
+    """
     jdir = _safe_job_dir(job_id)
     src = jdir / "input.pdf"
     if not src.exists():
         raise HTTPException(404, "input missing")
-    if level not in _COMPRESS_LEVELS:
-        raise HTTPException(400, f"invalid level (got {level!r})")
-
-    gs_setting, label, _ = _COMPRESS_LEVELS[level]
     meta = json.loads((jdir / "meta.json").read_text())
     base = Path(meta["filename"]).stem
     ts = _ts()
-    out = jdir / f"compressed-{level}-{ts}.pdf"
-
-    cmd = [
-        "gs",
-        "-sDEVICE=pdfwrite",
-        "-dCompatibilityLevel=1.5",
-        f"-dPDFSETTINGS={gs_setting}",
-        "-dNOPAUSE",
-        "-dQUIET",
-        "-dBATCH",
-        "-dDetectDuplicateImages=true",
-        "-dCompressFonts=true",
-        f"-sOutputFile={out}",
-        str(src),
-    ]
-    log.info("compress cmd: %s", " ".join(cmd))
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    _stdout, stderr = await proc.communicate()
-    if proc.returncode != 0 or not out.exists():
-        log.error("compress failed: %s", stderr.decode("utf-8", "replace")[-2000:])
-        raise HTTPException(500, f"compress failed: {stderr.decode('utf-8','replace')[-400:]}")
-
     original_size = src.stat().st_size
+
+    # ---- target-size mode ----
+    if target_mb and target_mb > 0:
+        target_bytes = int(target_mb * 1024 * 1024)
+        if target_bytes >= original_size:
+            raise HTTPException(
+                400,
+                f"target {target_mb} MB ≥ original ({original_size / 1024 / 1024:.2f} MB). "
+                f"Pick a smaller target or use a preset level.",
+            )
+        attempts: list[dict] = []
+        best: tuple[Path, int, dict] | None = None
+        for i, spec in enumerate(_TARGET_LADDER, 1):
+            tmp = jdir / f"compressed-target-attempt{i}-{ts}.pdf"
+            try:
+                await _run_gs_compress(src, tmp, spec)
+            except RuntimeError as e:
+                attempts.append({"label": spec["label"], "size": None, "error": str(e)})
+                continue
+            sz = tmp.stat().st_size
+            fits = sz <= target_bytes
+            attempts.append({"label": spec["label"], "size": sz, "fits": fits})
+            if best is None or sz < best[1]:
+                best = (tmp, sz, spec)
+            if fits:
+                final = jdir / f"compressed-target-{int(target_mb*10)}dMB-{ts}.pdf"
+                tmp.replace(final)
+                saved = max(0, original_size - sz)
+                return {
+                    "download": f"/api/jobs/{job_id}/download/{final.name}",
+                    "filename": f"{base}-compressed-{int(target_mb*10)}dMB-{ts}.pdf"
+                                .replace("dMB", "dMB"),
+                    "level": "target",
+                    "level_label": f"Target {target_mb} MB — {spec['label']}",
+                    "original_size": original_size,
+                    "new_size": sz,
+                    "saved_bytes": saved,
+                    "ratio_percent": round((saved / original_size) * 100, 1),
+                    "target_bytes": target_bytes,
+                    "attempts": attempts,
+                    "notice": None,
+                }
+        # Nothing fit — return smallest we produced.
+        if best is None:
+            raise HTTPException(500, "compression failed on every attempt")
+        out, sz, spec = best
+        final = jdir / f"compressed-target-best-{ts}.pdf"
+        out.replace(final)
+        saved = max(0, original_size - sz)
+        return {
+            "download": f"/api/jobs/{job_id}/download/{final.name}",
+            "filename": f"{base}-compressed-best-{ts}.pdf",
+            "level": "target",
+            "level_label": f"Target {target_mb} MB — best effort: {spec['label']}",
+            "original_size": original_size,
+            "new_size": sz,
+            "saved_bytes": saved,
+            "ratio_percent": round((saved / original_size) * 100, 1) if original_size else 0,
+            "target_bytes": target_bytes,
+            "attempts": attempts,
+            "notice": (
+                f"Couldn't hit {target_mb} MB even at the most aggressive setting "
+                f"({spec['label']}). This PDF is mostly text or vectors that don't "
+                f"shrink with image compression. Returning the smallest attempt "
+                f"({sz / 1024 / 1024:.2f} MB)."
+            ),
+        }
+
+    # ---- single-level mode ----
+    if level not in _LEVELS:
+        raise HTTPException(400, f"invalid level (got {level!r})")
+    spec = _LEVELS[level]
+    out = jdir / f"compressed-{level}-{ts}.pdf"
+    try:
+        await _run_gs_compress(src, out, spec)
+    except RuntimeError as e:
+        raise HTTPException(500, f"compress failed: {e}")
     new_size = out.stat().st_size
     saved = max(0, original_size - new_size)
     ratio = round((saved / original_size) * 100, 1) if original_size else 0.0
-
     notice: Optional[str] = None
     if new_size >= original_size:
         notice = (
             "The compressed file is the same size or larger than the original — "
             "this PDF is already heavily compressed, or contains mostly vector / "
-            "text content that can't shrink further. Try a stronger level, or "
-            "keep the original."
+            "text content that can't shrink further. Try Extreme, or set a "
+            "target size to iterate further."
         )
-
     return {
         "download": f"/api/jobs/{job_id}/download/{out.name}",
         "filename": f"{base}-compressed-{level}-{ts}.pdf",
         "level": level,
-        "level_label": label,
+        "level_label": spec["label"],
         "original_size": original_size,
         "new_size": new_size,
         "saved_bytes": saved,

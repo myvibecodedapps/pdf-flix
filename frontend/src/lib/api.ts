@@ -79,20 +79,25 @@ export async function reorderJob(jobId: string, order: number[]) {
   );
 }
 
-export async function compressJob(jobId: string, level: string) {
+export type CompressResult = {
+  download: string;
+  filename: string;
+  level: string;
+  level_label: string;
+  original_size: number;
+  new_size: number;
+  saved_bytes: number;
+  ratio_percent: number;
+  target_bytes?: number;
+  attempts?: { label: string; size: number | null; fits?: boolean; error?: string }[];
+  notice?: string | null;
+};
+
+export async function compressJob(jobId: string, level: string, targetMb?: number) {
   const fd = new FormData();
   fd.append("level", level);
-  return jfetch<{
-    download: string;
-    filename: string;
-    level: string;
-    level_label: string;
-    original_size: number;
-    new_size: number;
-    saved_bytes: number;
-    ratio_percent: number;
-    notice?: string | null;
-  }>(`/api/jobs/${jobId}/compress`, { method: "POST", body: fd });
+  if (targetMb && targetMb > 0) fd.append("target_mb", String(targetMb));
+  return jfetch<CompressResult>(`/api/jobs/${jobId}/compress`, { method: "POST", body: fd });
 }
 
 export async function ocrJob(
